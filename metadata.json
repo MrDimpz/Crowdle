@@ -1,0 +1,6 @@
+{
+  "name": "TikTok Crowd Lingo",
+  "description": "A crowd-controlled Lingo-style word game where TikTok chat guesses the words in real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
