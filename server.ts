@@ -50,23 +50,75 @@ async function startServer() {
   let currentWordLength = 5;
   let streak = 0;
   let totalStreak = 0;
+  let endlessStreak = 0;
+  let isEndlessMode = false;
+  let lastWinningWord = "";
   let roundTimerDuration = 30;
   let pendingTimerDuration = 30;
+
+  // Filter dictionary to create a pool of suitable target words
+  const targetPool: Record<number, string[]> = {};
+  
+  const exceptionsEndingInS = new Set([
+    "GLASS", "GRASS", "CLASS", "CHESS", "PRESS", "STRESS", "STATUS", "FOCUS", "DRESS", "GROSS", "CRISIS", "LENS", "MASS", "LOSS", "BOSS", "CROSS", "BLISS", "GUESS", "MESS", "LESS", "ROSS", "MISS", "KISS", "PASS", "PLUS", "BONUS", "MINUS", "VIRUS", "ABYSS", "CANVAS", "SERIES", "SPECIES"
+  ]);
+
+  const properNouns = new Set([
+     "CHINA", "HENRY", "JAPAN", "JONES", "LAURA", "PETER", "SIMON", "SMITH", "TERRY", "MARCH", "AUGUST",
+     "BERLIN", "EUROPE", "FRENCH", "GERMAN", "GREECE", "LONDON", "OXFORD", "REGINA", "ROMANS", "YOUTUBE",
+     "TORONTO", "CHINESE", "ITALIAN", "JANUARY", "JACKSONS", "JAPANESE", "JUPITERS", "MONTANAS",
+     "NICARAGU", "PACIFICS", "SATURDAY", "THURSDAY", "VICTORIA", "VIRGINIA", "JORDAN", "JOSEPH", "JERSEY",
+     "GRAHAM", "POLLUX", "MORRIS"
+  ]);
+
+  Object.entries(dictionary).forEach(([len, words]) => {
+    const length = parseInt(len);
+    targetPool[length] = words.filter(word => {
+      // 1. Remove Proper Nouns
+      if (properNouns.has(word)) return false;
+
+      // 2. Remove Regular Past Tense ending in -ED
+      if (word.endsWith("ED") && word.length > 3) return false;
+
+      // 3. Remove Plurals ending in -S or -ES
+      if (word.endsWith("S") && !exceptionsEndingInS.has(word)) return false;
+
+      return true;
+    });
+  });
+
+  // Backups for streak save
+  let prevStreak = 0;
+  let prevTotalStreak = 0;
+  let prevEndlessStreak = 0;
+  let saviorInfo: any = null;
+  let resetTimeout: NodeJS.Timeout | null = null;
 
   function resetGame() {
     // Apply pending timer duration
     roundTimerDuration = pendingTimerDuration;
 
-    // Increase difficulty if streak reached threshold
-    if (streak >= 5) {
-      streak = 0;
-      currentWordLength++;
-      if (currentWordLength > 8) currentWordLength = 5;
+    if (isEndlessMode) {
+      currentWordLength = 5;
+    } else {
+      // Increase difficulty if streak reached threshold
+      if (streak >= 5) {
+        streak = 0;
+        currentWordLength++;
+        if (currentWordLength > 8) currentWordLength = 5;
+      }
     }
 
-    const words = dictionary[currentWordLength];
+    const words = targetPool[currentWordLength] || dictionary[currentWordLength];
     targetWord = words[Math.floor(Math.random() * words.length)];
     guesses = [];
+
+    // Continuous chain in endless mode: auto-guess the last winning word
+    if (isEndlessMode && lastWinningWord && lastWinningWord.length === currentWordLength) {
+      const result = checkWord(lastWinningWord, targetWord);
+      guesses.push({ word: lastWinningWord, result });
+    }
+
     status = "PLAYING";
     currentVotes = {};
     voteOrder = [];
@@ -133,6 +185,10 @@ async function startServer() {
       status = "WON";
       streak++;
       totalStreak++;
+      if (isEndlessMode) {
+        endlessStreak++;
+        lastWinningWord = targetWord;
+      }
       
       // Keep WON for tumble, then splash
       setTimeout(() => {
@@ -146,18 +202,29 @@ async function startServer() {
       }, 2000);
     } else if (guesses.length >= 5) {
       status = "LOST";
+      
+      // Backup for streak save
+      prevStreak = streak;
+      prevTotalStreak = totalStreak;
+      prevEndlessStreak = endlessStreak;
+
       streak = 0;
       totalStreak = 0;
+      if (isEndlessMode) {
+        endlessStreak = 0;
+        lastWinningWord = "";
+      }
 
       // Transition to disappointing splash for tumble
       setTimeout(() => {
+        if (status !== "LOST") return; // Might have been saved
         status = "DEFEATED";
-        resetTimeLeft = 10;
+        resetTimeLeft = 60;
         broadcastState();
 
-        setTimeout(() => {
-          resetGame();
-        }, 10000);
+        resetTimeout = setTimeout(() => {
+          if (status === "DEFEATED") resetGame();
+        }, 60000);
       }, 2000);
     } else {
       timeLeft = roundTimerDuration; 
@@ -202,10 +269,12 @@ async function startServer() {
       });
 
     io.emit("game_state", {
-      targetWord: (status === "WON" || status === "LOST" || status === "CELEBRATING" || status === "DEFEATED") ? targetWord : hiddenWord,
+      targetWord: (status === "WON" || status === "LOST" || status === "CELEBRATING" || status === "DEFEATED" || status === "SAVED") ? targetWord : hiddenWord,
       wordLength: currentWordLength,
       streak,
       totalStreak,
+      endlessStreak,
+      isEndlessMode,
       roundTimerDuration: pendingTimerDuration, // UI shows what's selected
       activeTimerDuration: roundTimerDuration, // Actual timer bar uses this
       guesses,
@@ -213,6 +282,7 @@ async function startServer() {
       timeLeft,
       delayLeft,
       resetTimeLeft,
+      saviorInfo,
       voteCount: voteEntries.reduce((a, b) => a + b.count, 0),
       topVotes: voteEntries.slice(0, 5),
     });
@@ -255,7 +325,36 @@ async function startServer() {
 
         processGuess(message, data.uniqueId);
       });
+
+      tiktokConnection.on("gift", (data) => {
+        if (data.diamondCount >= 199 && (status === "LOST" || status === "DEFEATED")) {
+          handleStreakSave({
+            name: data.nickname,
+            profilePictureUrl: data.profilePictureUrl,
+            giftName: data.giftName,
+            giftPictureUrl: data.giftPictureUrl?.replace("_100x100.webp", "_large.png") || ""
+          });
+        }
+      });
     });
+
+    function handleStreakSave(info: any) {
+      if (resetTimeout) clearTimeout(resetTimeout);
+      status = "SAVED";
+      saviorInfo = info;
+      
+      // Restore streaks
+      streak = prevStreak;
+      totalStreak = prevTotalStreak;
+      endlessStreak = prevEndlessStreak;
+      
+      broadcastState();
+      
+      setTimeout(() => {
+        saviorInfo = null;
+        resetGame();
+      }, 7000);
+    }
 
     socket.on("test_guess", (word: string) => {
       const message = word.toUpperCase().trim();
@@ -289,8 +388,30 @@ async function startServer() {
       }
     });
 
+    socket.on("simulate_streak_save", () => {
+      if (status === "LOST" || status === "DEFEATED") {
+        handleStreakSave({
+          name: "TikTok Legend",
+          profilePictureUrl: "https://p16-sign-va.tiktokcdn.com/tos-maliva-avt-0068/7339247348981448709~c5_100x100.webp?lk3s=a5d48d8d&x-expires=1714532400&x-signature=8B9fF7%2Fj%2Bw9%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2Bw%3D",
+          giftName: "TikTok Universe",
+          giftPictureUrl: "https://p16-webcast.tiktokcdn.com/img/maliva/webcast/5f8b9e6e4f3a7f8e8e8e8e8e8e8e8e8e~tplv-obj:100:100.webp"
+        });
+      }
+    });
+
     socket.on("set_timer_duration", (duration: number) => {
       pendingTimerDuration = duration;
+      broadcastState();
+    });
+
+    socket.on("toggle_endless_mode", () => {
+      isEndlessMode = !isEndlessMode;
+      if (isEndlessMode) {
+        currentWordLength = 5;
+        streak = 0;
+        lastWinningWord = "";
+        endlessStreak = 0;
+      }
       broadcastState();
     });
 
