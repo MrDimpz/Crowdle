@@ -55,6 +55,7 @@ async function startServer() {
   let lastWinningWord = "";
   let roundTimerDuration = 30;
   let pendingTimerDuration = 30;
+  let targetWordGuesser: { uniqueId: string, nickname?: string, profilePictureUrl?: string } | null = null;
 
   // Filter dictionary to create a pool of suitable target words
   const targetPool: Record<number, string[]> = {};
@@ -97,6 +98,7 @@ async function startServer() {
   function resetGame() {
     // Apply pending timer duration
     roundTimerDuration = pendingTimerDuration;
+    targetWordGuesser = null;
 
     if (isEndlessMode) {
       currentWordLength = 5;
@@ -283,6 +285,7 @@ async function startServer() {
       delayLeft,
       resetTimeLeft,
       saviorInfo,
+      targetWordGuesser,
       voteCount: voteEntries.reduce((a, b) => a + b.count, 0),
       topVotes: voteEntries.slice(0, 5),
     });
@@ -323,16 +326,43 @@ async function startServer() {
           comment: data.comment
         });
 
-        processGuess(message, data.uniqueId);
+        processGuess(message, data);
       });
 
       tiktokConnection.on("gift", (data) => {
+        io.emit("tiktok_chat", {
+          uniqueId: data.uniqueId,
+          nickname: data.nickname,
+          profilePictureUrl: data.profilePictureUrl,
+          comment: `🎁 Sent ${data.giftName} x${data.repeatCount || 1}`
+        });
+
         if (data.diamondCount >= 199 && (status === "LOST" || status === "DEFEATED")) {
           handleStreakSave({
             name: data.nickname,
             profilePictureUrl: data.profilePictureUrl,
             giftName: data.giftName,
             giftPictureUrl: data.giftPictureUrl?.replace("_100x100.webp", "_large.png") || ""
+          });
+        }
+      });
+
+      tiktokConnection.on("like", (data) => {
+        io.emit("tiktok_chat", {
+          uniqueId: data.uniqueId,
+          nickname: data.nickname,
+          profilePictureUrl: data.profilePictureUrl,
+          comment: `❤️ Liked the LIVE`
+        });
+      });
+      
+      tiktokConnection.on("social", (data) => {
+        if (data.displayType === "follow") {
+          io.emit("tiktok_chat", {
+            uniqueId: data.uniqueId,
+            nickname: data.nickname,
+            profilePictureUrl: data.profilePictureUrl,
+            comment: `➕ Followed the host`
           });
         }
       });
@@ -358,7 +388,19 @@ async function startServer() {
 
     socket.on("test_guess", (word: string) => {
       const message = word.toUpperCase().trim();
-      processGuess(message, socket.id);
+      
+      io.emit("tiktok_chat", {
+        uniqueId: "debug_" + socket.id.substring(0, 4),
+        nickname: "TestUser",
+        profilePictureUrl: "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y",
+        comment: message
+      });
+
+      processGuess(message, { 
+        uniqueId: "debug_" + socket.id.substring(0, 4), 
+        nickname: "TestUser", 
+        profilePictureUrl: "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y" 
+      });
     });
 
     socket.on("debug_win", () => {
@@ -415,7 +457,7 @@ async function startServer() {
       broadcastState();
     });
 
-    function processGuess(message: string, userId: string) {
+    function processGuess(message: string, user: { uniqueId: string; nickname?: string; profilePictureUrl?: string; }) {
       // Normalize: remove "FOR FILLER" if present and trim
       let processed = message.replace(/\bFOR FILLER\b/gi, "").trim();
 
@@ -427,7 +469,12 @@ async function startServer() {
           currentVotes[processed] = new Set();
           voteOrder.push(processed); // Track first occurrence
         }
-        currentVotes[processed].add(userId);
+        currentVotes[processed].add(user.uniqueId);
+
+        if (processed === targetWord && !targetWordGuesser) {
+          targetWordGuesser = user;
+        }
+
         broadcastState();
       }
     }

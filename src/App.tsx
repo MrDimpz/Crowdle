@@ -35,6 +35,11 @@ interface GameState {
   activeTimerDuration: number;
   delayLeft: number;
   resetTimeLeft: number;
+  targetWordGuesser?: {
+    uniqueId: string;
+    nickname?: string;
+    profilePictureUrl?: string;
+  };
   saviorInfo?: {
     name: string;
     profilePictureUrl: string;
@@ -65,6 +70,12 @@ export default function App() {
   const chatRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (chatRef.current) {
+      chatRef.current.scrollTop = chatRef.current.scrollHeight;
+    }
+  }, [chatMessages]);
+
+  useEffect(() => {
     const newSocket = io();
     setSocket(newSocket);
 
@@ -77,7 +88,7 @@ export default function App() {
     });
 
     newSocket.on("tiktok_chat", (msg: ChatMessage) => {
-      setChatMessages(prev => [msg, ...prev].slice(0, 50));
+      setChatMessages(prev => [...prev, msg].slice(-200));
     });
 
     newSocket.on("tiktok_connected", (user) => {
@@ -115,6 +126,41 @@ export default function App() {
     </div>
   );
 
+  const getKeyboardState = () => {
+    const keyState: Record<string, "correct" | "present" | "absent" | "unused"> = {};
+    if (!gameState) return keyState;
+    
+    // Initialize all letters to unused
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").forEach(char => {
+      keyState[char] = "unused";
+    });
+
+    gameState.guesses.forEach(guess => {
+      guess.word.split('').forEach((char, i) => {
+        const result = guess.result[i];
+        const current = keyState[char];
+        
+        // Priority: correct > present > absent > unused
+        if (result === "correct" || current === "correct") {
+          keyState[char] = "correct";
+        } else if (result === "present" || current === "present") {
+          keyState[char] = "present";
+        } else if (result === "absent" && current === "unused") {
+          keyState[char] = "absent";
+        }
+      });
+    });
+    
+    return keyState;
+  };
+
+  const keyState = getKeyboardState();
+  const keyboardRows = [
+    ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+    ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+    ["Z", "X", "C", "V", "B", "N", "M"]
+  ];
+
   return (
     <div className={`min-h-screen ${isOverlay ? 'bg-transparent' : 'bg-[#0f172a]'} text-white font-sans overflow-hidden flex flex-col relative selection:bg-fuchsia-500 selection:text-white`}>
       {/* Background Decorative Gradients */}
@@ -136,11 +182,11 @@ export default function App() {
               <h3 className="text-[10px] font-black text-fuchsia-400 mb-6 uppercase tracking-[0.25em] flex items-center gap-2">
                 <Users className="w-3 h-3" /> Chat Feed
               </h3>
-              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
+              <div ref={chatRef} className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3 scroll-smooth">
                 {chatMessages.length > 0 ? chatMessages.map((msg, i) => (
                   <motion.div 
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
+                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
                     key={msg.uniqueId + i}
                     className="flex gap-3 bg-white/5 p-3 rounded-2xl border border-white/5"
                   >
@@ -166,33 +212,24 @@ export default function App() {
           )}
 
           {/* Main Game Container: Optimized for OBS Capture */}
-          <div className="w-[500px] h-[720px] bg-slate-950 border-4 border-white/10 rounded-3xl shadow-[0_0_100px_rgba(0,0,0,0.5)] flex flex-col items-center p-6 relative overflow-hidden shrink-0 ring-1 ring-white/10">
+          <div className="w-[400px] h-[700px] bg-slate-950 border-4 border-white/10 rounded-3xl shadow-[0_0_100px_rgba(0,0,0,0.5)] flex flex-col items-center p-6 relative overflow-hidden shrink-0 ring-1 ring-white/10">
             {/* Header / Countdown */}
-            <div className="w-full flex items-center justify-between mb-6 z-10">
-              <div className="flex items-center gap-2">
-                <div className="bg-red-500 px-3 py-0.5 rounded text-[8px] font-black uppercase tracking-[0.2em] animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.4)]">Live</div>
-                <div className="bg-cyan-500/20 px-2 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1.5 shadow-[0_0_20px_rgba(34,211,238,0.1)]">
+            <div className="w-full flex items-center justify-between mb-4 z-10">
+              <div className="flex items-center gap-1.5">
+                <div className="bg-red-500 px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-[0.2em] animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.4)]">Live</div>
+                <div className="bg-cyan-500/20 px-2 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1 shadow-[0_0_20px_rgba(34,211,238,0.1)] text-[8px] font-black uppercase text-cyan-400">
                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-400"></div>
-                   <span className="text-[9px] font-black uppercase text-cyan-400">
-                     {gameState.isEndlessMode ? `Endless: ${gameState.endlessStreak}` : `Sync: ${gameState.streak}/5`}
-                   </span>
+                   {gameState.isEndlessMode ? `Endless:${gameState.endlessStreak}` : `Sync:${gameState.streak}/5`}
+                </div>
+                <div className="flex items-center gap-1 px-2 py-0.5 bg-white/10 rounded border border-white/20 shadow-[0_0_15px_rgba(0,0,0,0.5)]">
+                  <Trophy className="w-2.5 h-2.5 text-yellow-500" />
+                  <span className="text-[8px] font-black uppercase tracking-[0.2em] text-white">Streak:{gameState.isEndlessMode ? gameState.endlessStreak : gameState.totalStreak}</span>
                 </div>
               </div>
 
-              {/* Streak Counter (Centered) */}
-              <div className="absolute inset-x-0 top-[22px] flex justify-center pointer-events-none z-30">
-                <div className="flex items-center gap-2 px-3 py-1 bg-white/10 rounded-full border border-white/20 backdrop-blur-md shadow-[0_0_25px_rgba(0,0,0,0.5)] pointer-events-auto">
-                  <Trophy className="w-3 h-3 text-yellow-500 drop-shadow-[0_0_8px_rgba(234,179,8,0.6)]" />
-                  <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/90">Streak:</span>
-                  <span className="text-sm font-black text-white italic tracking-tighter">
-                    {gameState.isEndlessMode ? gameState.endlessStreak : gameState.totalStreak}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Timer className="w-4 h-4 text-fuchsia-400" />
-                <span className="text-2xl font-black italic tracking-tighter tabular-nums drop-shadow-lg">
+              <div className="flex items-center gap-1.5">
+                <Timer className="w-3.5 h-3.5 text-fuchsia-400" />
+                <span className="text-xl font-black italic tracking-tighter tabular-nums drop-shadow-lg">
                   00:{Math.ceil(gameState.timeLeft).toString().padStart(2, '0')}
                 </span>
               </div>
@@ -273,8 +310,25 @@ export default function App() {
                       <p className="text-[10px] text-white/40 uppercase font-black tracking-widest mb-2 font-mono relative z-10">Target Word Decrypted</p>
                       <p className="text-4xl font-display font-black text-white tracking-[0.2em] relative z-10">{gameState.targetWord}</p>
                     </div>
+
+                    {gameState.targetWordGuesser && (
+                      <div className="mt-4 flex flex-col items-center bg-white/5 px-6 py-3 rounded-2xl border border-white/10 w-full backdrop-blur-md">
+                        <p className="text-[8px] text-fuchsia-400 font-black uppercase tracking-[0.2em] mb-2">First to find it</p>
+                        <div className="flex items-center gap-3">
+                          <img 
+                            src={gameState.targetWordGuesser.profilePictureUrl || "https://www.gravatar.com/avatar/0?d=mp&f=y"} 
+                            alt="" 
+                            className="w-10 h-10 rounded-full border-2 border-fuchsia-500/50 shadow-[0_0_15px_rgba(217,70,239,0.3)] object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                          <p className="text-[14px] font-black text-white tracking-wide">
+                            {gameState.targetWordGuesser.nickname || gameState.targetWordGuesser.uniqueId}
+                          </p>
+                        </div>
+                      </div>
+                    )}
   
-                    <div className="mt-8 flex flex-col items-center gap-4">
+                    <div className="mt-6 flex flex-col items-center gap-4">
                       <p className="text-white/20 text-[9px] font-black uppercase tracking-widest flex items-center gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/40 animate-ping"></span>
                         Next round in {Math.ceil(gameState.resetTimeLeft)}s...
@@ -356,7 +410,7 @@ export default function App() {
               </AnimatePresence>
 
               {/* Timer Bar (Relocated) */}
-              <div className="w-full bg-white/5 border border-white/10 rounded-full h-8 relative overflow-hidden backdrop-blur-sm shadow-inner z-10" style={{ maxWidth: gameState.wordLength <= 6 ? '400px' : '460px' }}>
+              <div className="w-full bg-white/5 border border-white/10 rounded-full h-8 relative overflow-hidden backdrop-blur-sm shadow-inner z-10 w-full max-w-full">
                 {gameState.status === "PLAYING" && (
                   <motion.div 
                     initial={{ width: "100%" }}
@@ -371,10 +425,7 @@ export default function App() {
               </div>
   
               <div 
-                className="grid grid-rows-5 gap-2.5 z-20 w-full"
-                style={{ 
-                  maxWidth: gameState.wordLength <= 6 ? '400px' : '460px'
-                }}
+                className="grid grid-rows-5 gap-2.5 z-20 w-full max-w-full"
               >
                 {[...Array(5)].map((_, rowIndex) => {
                   const guess = gameState.guesses[rowIndex];
@@ -486,40 +537,65 @@ export default function App() {
               </div>
 
               {/* Top Vote Display (Relocated above other guesses) */}
-              <div className={`w-full -mt-1 z-10 px-4 transition-opacity duration-500 ${(gameState.status === "WON" || gameState.status === "LOST" || gameState.status === "DEFEATED" || gameState.status === "CELEBRATING" || gameState.status === "SAVED") ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
+              <div className={`w-full z-10 px-4 transition-opacity duration-500 ${(gameState.status === "WON" || gameState.status === "LOST" || gameState.status === "DEFEATED" || gameState.status === "CELEBRATING" || gameState.status === "SAVED") ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
                 <div className="text-center">
-                  <p className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em] mb-1">Crowd Consensus ({gameState.wordLength} Letters)</p>
-                  <p className={`text-6xl font-black italic tracking-tighter min-h-[64px] transition-all duration-300 drop-shadow-[0_0_40px_rgba(244,63,94,0.4)]
+                  <p className="text-[9px] font-black text-white/40 uppercase tracking-[0.3em] mb-0.5">Crowd Consensus ({gameState.wordLength} Letters)</p>
+                  <p className={`text-4xl font-black italic tracking-tighter min-h-[40px] transition-all duration-300 drop-shadow-[0_0_40px_rgba(244,63,94,0.4)]
                     ${gameState.delayLeft > 0 ? "text-fuchsia-400 animate-pulse" : "bg-gradient-to-r from-rose-500 via-fuchsia-400 via-white via-cyan-400 to-indigo-500 bg-clip-text text-transparent animate-gradient-slow w-full"}`}>
                     {gameState.delayLeft > 0 ? "PREPARING..." : (gameState.topVotes[0]?.word || "???")}
                   </p>
-                  <div className="flex justify-center items-center gap-2 mt-2">
-                    <div className={`w-2 h-2 rounded-full ${gameState.delayLeft > 0 ? "bg-fuchsia-400" : "bg-cyan-400"} animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.8)]`}></div>
-                    <span className="text-[10px] font-mono text-cyan-400 font-bold uppercase">{gameState.voteCount} Votes cast</span>
+                  <div className="flex justify-center items-center gap-2 mt-1 mb-2">
+                    <div className={`w-1.5 h-1.5 rounded-full ${gameState.delayLeft > 0 ? "bg-fuchsia-400" : "bg-cyan-400"} animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.8)]`}></div>
+                    <span className="text-[9px] font-mono text-cyan-400 font-bold uppercase">{gameState.voteCount} Votes cast</span>
                   </div>
                 </div>
               </div>
 
               {/* Voting Marquee (Moved here from secondary list) */}
-              <div className={`w-full h-12 bg-slate-900/60 rounded-xl -mt-0.5 relative overflow-hidden border border-white/5 backdrop-blur-md flex items-center transition-opacity duration-500 ${(gameState.status === "WON" || gameState.status === "LOST" || gameState.status === "DEFEATED" || gameState.status === "CELEBRATING" || gameState.status === "SAVED") ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
+              <div className={`w-full h-8 bg-slate-900/60 rounded-lg relative overflow-hidden border border-white/5 backdrop-blur-md flex items-center transition-opacity duration-500 ${(gameState.status === "WON" || gameState.status === "LOST" || gameState.status === "DEFEATED" || gameState.status === "CELEBRATING" || gameState.status === "SAVED") ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
                 <div className="absolute left-0 top-0 bottom-0 px-2 bg-slate-950 z-20 flex items-center border-r border-white/10 shadow-[4px_0_15px_rgba(0,0,0,0.5)]">
-                  <span className="text-[7px] font-black uppercase text-cyan-400 tracking-tight whitespace-nowrap">Other Guesses:</span>
+                  <span className="text-[6px] font-black uppercase text-cyan-400 tracking-tight whitespace-nowrap">Other Guesses:</span>
                 </div>
-                <div className="flex gap-8 whitespace-nowrap animate-marquee-fast items-center hover:pause pl-20">
+                <div className="flex gap-6 whitespace-nowrap animate-marquee-fast items-center hover:pause pl-16">
                   {[...Array(3)].map((_, j) => (
-                    <div key={j} className="flex gap-12 items-center px-4">
+                    <div key={j} className="flex gap-8 items-center px-4">
                       {gameState.topVotes.slice(1).map((vote) => (
-                        <div key={vote.word + j} className="flex items-center gap-3">
-                          <span className="font-black text-2xl text-white italic tracking-tighter drop-shadow-md">{vote.word}</span>
-                          <span className="text-[10px] font-mono text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-400/20">{vote.count}</span>
-                        </div>
+                         <div key={vote.word + j} className="flex items-center gap-2">
+                           <span className="font-black text-lg text-white italic tracking-tighter drop-shadow-md">{vote.word}</span>
+                           <span className="text-[9px] font-mono text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded border border-cyan-400/20">{vote.count}</span>
+                         </div>
                       ))}
                       {gameState.topVotes.length <= 1 && (
-                        <span className="text-xl text-white/10 uppercase font-black italic tracking-widest whitespace-nowrap">Awaiting Synchronicity...</span>
+                        <span className="text-sm text-white/10 uppercase font-black italic tracking-widest whitespace-nowrap">Awaiting Synchronicity...</span>
                       )}
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Keyboard Representation */}
+              <div className={`w-full mt-auto mb-0 flex flex-col items-center gap-0.5 z-10 transition-opacity duration-500 ${(gameState.status === "WON" || gameState.status === "LOST" || gameState.status === "DEFEATED" || gameState.status === "CELEBRATING" || gameState.status === "SAVED") ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
+                {keyboardRows.map((row, i) => (
+                  <div key={i} className="flex items-center justify-center gap-1 w-full">
+                    {row.map(char => {
+                      const state = keyState[char];
+                      return (
+                        <div 
+                          key={char} 
+                          className={`flex items-center justify-center w-[26px] h-7 rounded text-[10px] font-black border border-white/10
+                            ${state === 'absent' ? 'opacity-0' :
+                              state === 'correct' ? 'bg-emerald-500 text-white border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]' :
+                              state === 'present' ? 'bg-amber-500 text-white border-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.3)]' :
+                              'bg-slate-800/80 text-white/80'
+                            }
+                          `}
+                        >
+                          {char}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))}
               </div>
             </div>
 
